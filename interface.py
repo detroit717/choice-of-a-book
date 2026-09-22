@@ -2,23 +2,14 @@ import sys
 import tkinter as tk
 from tkinter import ttk, messagebox, scrolledtext
 
-try:
-    from file import (
-        ExpertSystem, RULES_FILE, format_display, normalize,
-        parse_natural_language
-    )
-except ImportError:
-    import tkinter.messagebox as mb
-    root = tk.Tk(); root.withdraw()
-    mb.showerror(
-        "Ошибка импорта",
-        "Не найден модуль file.py.\n"
-        "Положите interface.py рядом с file.py."
-    )
-    sys.exit(1)
+from file import (
+    ExpertSystem, RULES_FILE, format_display, normalize,
+    parse_natural_language
+)
 
-
+# Главный класс приложения Tkinter, создающий графический окно и инициализирующий вкладки.
 class App(tk.Tk):
+    # Конструктор класса App: настраивает параметры окна, экспертную систему, стили и вкладки.
     def __init__(self):
         super().__init__()
         self.title("Подбор книг")
@@ -48,6 +39,7 @@ class App(tk.Tk):
         self.nb = nb
         self.nb.bind("<<NotebookTabChanged>>", self.on_tab_changed)
 
+    # Перехватывает переключение вкладок и обновляет данные на целевой вкладке.
     def on_tab_changed(self, event):
         idx = self.nb.index(self.nb.select())
         if idx == 1:
@@ -56,7 +48,9 @@ class App(tk.Tk):
             self.tab_state.refresh()
 
 
+# Класс вкладки «Подбор книги» для ввода текстового запроса пользователем и запуска прямого вывода.
 class InferenceTab(ttk.Frame):
+    # Конструктор класса InferenceTab: создает текстовые поля, кнопки управления и виджет логирования.
     def __init__(self, parent, es: ExpertSystem):
         super().__init__(parent, padding=10)
         self.es = es
@@ -82,12 +76,14 @@ class InferenceTab(ttk.Frame):
         self.log.tag_config("final", foreground="#b00020", font=("Consolas", 11, "bold"))
         self.log.tag_config("warn",  foreground="#c06000")
 
+    # Добавляет форматированную строку в лог вывода с указанным тегом стиля.
     def write_log(self, text, tag=None):
         self.log.configure(state="normal")
         self.log.insert("end", text + "\n", tag or "")
         self.log.see("end")
         self.log.configure(state="disabled")
 
+    # Сбрасывает введенный пользователем текст, лог вывода и очищает рабочую базу данных.
     def clear_all(self):
         self.input.delete("1.0", "end")
         self.log.configure(state="normal")
@@ -95,6 +91,7 @@ class InferenceTab(ttk.Frame):
         self.log.configure(state="disabled")
         self.es.wm = {}
 
+    # Запускает процесс распознавания фактов из текста и выполняет алгоритм прямого вывода.
     def run_inference(self):
         user_text = self.input.get("1.0", "end").strip()
         if not user_text:
@@ -158,7 +155,9 @@ class InferenceTab(ttk.Frame):
         self.write_log("Превышен лимит шагов вывода.", "warn")
 
 
+# Класс вкладки «База правил» для просмотра, добавления, редактирования и удаления правил экспертной системы.
 class RulesTab(ttk.Frame):
+    # Конструктор класса RulesTab: инициализирует таблицу правил и форму ввода с кнопками действий.
     def __init__(self, parent, es: ExpertSystem):
         super().__init__(parent, padding=10)
         self.es = es
@@ -193,6 +192,7 @@ class RulesTab(ttk.Frame):
 
         self.refresh()
 
+    # Перезагружает и отображает актуальный список правил из базы в таблице Treeview.
     def refresh(self):
         for iid in self.tree.get_children():
             self.tree.delete(iid)
@@ -201,6 +201,7 @@ class RulesTab(ttk.Frame):
             then_str = ", ".join(f"{format_display(k)}='{format_display(v)}'" for k, v in r["then"].items())
             self.tree.insert("", "end", values=(r["id"], if_str, then_str))
 
+    # Парсит и валидирует тексты из полей ввода 'ЕСЛИ' и 'ТО', преобразуя их в словари.
     def _parse_inputs(self):
         raw_if = self.if_entry.get().strip()
         raw_then = self.then_entry.get().strip()
@@ -232,6 +233,7 @@ class RulesTab(ttk.Frame):
 
         return if_dict, then_dict
 
+    # Считывает введенные параметры, создает новое правило с уникальным ID и сохраняет его в файл.
     def add_rule(self):
         if_dict, then_dict = self._parse_inputs()
         if if_dict is None:
@@ -246,6 +248,7 @@ class RulesTab(ttk.Frame):
         self.refresh()
         messagebox.showinfo("Готово", f"Правило №{new_id} добавлено.")
 
+    # Обновляет условия и выводы выделенного в таблице правила новыми данными из полей ввода.
     def edit_selected(self):
         sel = self.tree.selection()
         if not sel:
@@ -264,6 +267,7 @@ class RulesTab(ttk.Frame):
             self.refresh()
             messagebox.showinfo("Готово", f"Правило №{rule_id} успешно изменено.")
 
+    # Удаляет выбранное в таблице правило из базы и обновляет файл.
     def delete_selected(self):
         sel = self.tree.selection()
         if not sel:
@@ -277,7 +281,9 @@ class RulesTab(ttk.Frame):
         self.refresh()
 
 
+# Класс вкладки «Состояние РБД» для отображения списка текущих фактов в рабочей базе данных.
 class StateTab(ttk.Frame):
+    # Конструктор класса StateTab: настраивает таблицу отображения объектов и их значений из РБД.
     def __init__(self, parent, es: ExpertSystem):
         super().__init__(parent, padding=10)
         self.es = es
@@ -295,6 +301,7 @@ class StateTab(ttk.Frame):
         ttk.Button(self, text="Обновить состояние", command=self.refresh).pack(anchor="e", pady=8)
         self.refresh()
 
+    # Заполняет таблицу (парами объект-значение) из рабочей памяти системы.
     def refresh(self):
         for iid in self.tree.get_children():
             self.tree.delete(iid)

@@ -145,6 +145,16 @@ class ExpertSystem:
         self.rules.append({"id": new_id, "if": if_dict, "then": then_dict})
         self.save_rules()
 
+    def edit_rule(self, rule_id, new_if, new_then):
+        """Изменяет существующее правило по ID и сохраняет файл."""
+        for rule in self.rules:
+            if rule["id"] == rule_id:
+                rule["if"] = new_if
+                rule["then"] = new_then
+                self.save_rules()
+                return True
+        return False
+
     def delete_rule(self):
         self.show_rules()
         if not self.rules:
@@ -226,24 +236,24 @@ class ExpertSystem:
                     else:
                         print("Не удалось распознать факт.")
 
-def main():
-    es = ExpertSystem(RULES_FILE)
-    while True:
-        print("\n=== ЭКСПЕРТНАЯ СИСТЕМА ПОДБОРА КНИГ ===")
-        print("1. Запуск вывода (Подбор книги)")
-        print("2. Редактировать базу знаний")
-        print("3. Показать все правила")
-        print("0. Выход")
-        choice = input("> ").strip()
+#def main():
+#    es = ExpertSystem(RULES_FILE)
+#    while True:
+#        print("\n=== ЭКСПЕРТНАЯ СИСТЕМА ПОДБОРА КНИГ ===")
+#        print("1. Запуск вывода (Подбор книги)")
+#        print("2. Редактировать базу знаний")
+#        print("3. Показать все правила")
+#        print("0. Выход")
+#        choice = input("> ").strip()
 
-        if choice == "1":
-            es.run_forward_chaining()
-        elif choice == "2":
-            es.edit_rules_menu()
-        elif choice == "3":
-            es.show_rules()
-        elif choice == "0":
-            break
+#        if choice == "1":
+#            es.run_forward_chaining()
+#        elif choice == "2":
+#            es.edit_rules_menu()
+#        elif choice == "3":
+#            es.show_rules()
+#        elif choice == "0":
+#            break
 
-if __name__ == "__main__":
-    main()
+#if __name__ == "__main__":
+#    main()

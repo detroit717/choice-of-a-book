@@ -20,17 +20,28 @@ KEYWORDS = {
             "роботы", "будущее", "sci-fi", "космос", "наука", "гаджеты"
         ],
         "вымышленный_мир": [
-            "вымышленный", "магия", "эльфы", "драконы", "чудеса", "фэнтези", "сказка"
+            "вымышленный", "магия", "эльфы", "драконы", "чудеса", "сказка"
         ],
         "загадки": [
-            "загадки", "убийство", "расследование", "детектив", "тайна", "преступление"
+            "загадки", "убийство", "расследование", "тайна", "преступление"
         ],
         "мышление": [
             "мышление", "мозг", "психология", "поведение", "мысли"
         ],
         "прошлое": [
             "прошлое", "история", "историческая", "древность", "предки"
+        ],
+        "общество": [
+            "общество", "тоталитаризм", "государство", "система", "контроль", "социум"
         ]
+    },
+    "жанр": {
+        "научная_фантастика": ["фантастика", "фантастику", "научная фантастика"],
+        "фэнтези": ["фэнтези", "фентези"],
+        "детектив": ["детектив", "детективы"],
+        "антиутопия": ["антиутопия", "антиутопию"],
+        "история": ["исторический", "историческую"],
+        "психология": ["психологическую", "психологическое"]
     },
     "объем": {
         "небольшой": [
@@ -49,16 +60,13 @@ KEYWORDS = {
 }
 
 def normalize(text: str) -> str:
-    """Приводит текст к нижнему регистру, заменяет 'ё' на 'е' и пробелы на '_'."""
     text = text.strip().lower().replace("ё", "е")
     return "_".join(text.split())
 
 def format_display(text: str) -> str:
-    """Форматирует текст из базы для красивого вывода."""
-    return text.replace("_", " ")
+    return str(text).replace("_", " ")
 
 def parse_natural_language(text: str) -> dict:
-    """Анализирует произвольную строку пользователя и извлекает известные факты."""
     clean_text = text.lower().replace("ё", "е")
     words = re.findall(r'\b\w+\b', clean_text)
     
@@ -66,7 +74,8 @@ def parse_natural_language(text: str) -> dict:
     for obj, val_map in KEYWORDS.items():
         for val, kw_list in val_map.items():
             for kw in kw_list:
-                if kw in words or any(kw in w for w in words):
+                kw_norm = kw.lower().replace("ё", "е")
+                if kw_norm in clean_text or kw_norm in words or any(kw_norm in w for w in words):
                     extracted[obj] = val
                     break
     return extracted
@@ -85,6 +94,8 @@ class ExpertSystem:
                     self.rules = json.load(f)
             except Exception as e:
                 print(f"Ошибка загрузки базы правил: {e}")
+        else:
+            self.rules = []
 
     def save_rules(self):
         try:
@@ -119,7 +130,7 @@ class ExpertSystem:
 
     def add_rule(self):
         if_dict = {}
-        print("\nФормирование условий ЕСЛИ (формат 'объект: значение', Enter — завершить):")
+        print("\nФормирование условий ЕСЛИ (формат 'объект: значение', Enter — завершить ввод условий):")
         while True:
             raw = input("ЕСЛИ > ").strip()
             if not raw:
@@ -131,15 +142,17 @@ class ExpertSystem:
                 k, v = raw.split(":", 1)
                 if_dict[normalize(k)] = normalize(v)
             else:
-                print("Используйте двоеточие, например: 'цель: развлечение'")
+                print("Используйте двоеточие, например: 'предпочтение: общество'")
 
         while True:
             raw = input("ТО (формат 'объект: значение') > ").strip()
             if ":" in raw:
                 k, v = raw.split(":", 1)
-                then_dict = {normalize(k): v.strip()}
+                norm_k = normalize(k)
+                norm_v = v.strip() if norm_k == "рекомендация" else normalize(v)
+                then_dict = {norm_k: norm_v}
                 break
-            print("Используйте двоеточие.")
+            print("Используйте двоеточие, например: 'рекомендация: Название книги'")
 
         new_id = max([r['id'] for r in self.rules], default=0) + 1
         self.rules.append({"id": new_id, "if": if_dict, "then": then_dict})
@@ -185,9 +198,7 @@ class ExpertSystem:
             self.show_working_memory()
 
             if "рекомендация" in self.wm:
-                print(f"\n==========================================")
                 print(f"РЕЗУЛЬТАТ: {self.wm['рекомендация']}")
-                print(f"==========================================")
                 break
 
             rule_fired = False
@@ -218,13 +229,15 @@ class ExpertSystem:
                 
                 if ":" in raw:
                     k, v = raw.split(":", 1)
-                    self.wm[normalize(k)] = normalize(v)
+                    norm_k = normalize(k)
+                    norm_v = v.strip() if norm_k == "рекомендация" else normalize(v)
+                    self.wm[norm_k] = norm_v
                 else:
                     more_extracted = parse_natural_language(raw)
                     if more_extracted:
                         self.wm.update(more_extracted)
                     else:
-                        print("Не удалось распознать факт.")
+                        print("Не удалось распознать факт. Попробуйте ввести в формате 'объект: значение'.")
 
 def main():
     es = ExpertSystem(RULES_FILE)

@@ -8,10 +8,9 @@ MAX_DEPTH = 50
 
 
 class ProofNode:
-    """Узел дерева доказательства обратной цепочки рассуждений."""
 
     def __init__(self, kind, text, ok=False):
-        self.kind = kind   # goal | rule | fact | contra | norule | cycle
+        self.kind = kind  
         self.text = text
         self.ok = ok
         self.children = []

@@ -1,3 +1,4 @@
+import os
 import sys
 import tkinter as tk
 from tkinter import ttk, messagebox, scrolledtext
@@ -29,10 +30,12 @@ class App(tk.Tk):
         nb.pack(fill="both", expand=True, padx=8, pady=8)
 
         self.tab_infer = InferenceTab(nb, self.es)
+        self.tab_backward = BackwardTab(nb, self.es)
         self.tab_rules = RulesTab(nb, self.es)
         self.tab_state = StateTab(nb, self.es)
 
-        nb.add(self.tab_infer, text="  Подбор книги  ")
+        nb.add(self.tab_infer, text="  Подбор книги (прямой вывод)  ")
+        nb.add(self.tab_backward, text="  Обратный вывод  ")
         nb.add(self.tab_rules, text="  База правил  ")
         nb.add(self.tab_state, text="  Состояние РБД  ")
 
@@ -41,11 +44,13 @@ class App(tk.Tk):
 
     # Перехватывает переключение вкладок и обновляет данные на целевой вкладке.
     def on_tab_changed(self, event):
-        idx = self.nb.index(self.nb.select())
-        if idx == 1:
+        current = self.nb.nametowidget(self.nb.select())
+        if current is self.tab_rules:
             self.tab_rules.refresh()
-        elif idx == 2:
+        elif current is self.tab_state:
             self.tab_state.refresh()
+        elif current is self.tab_backward:
+            self.tab_backward.refresh_state()
 
 
 # Класс вкладки «Подбор книги» для ввода текстового запроса пользователем и запуска прямого вывода.
@@ -89,7 +94,7 @@ class InferenceTab(ttk.Frame):
         self.log.configure(state="normal")
         self.log.delete("1.0", "end")
         self.log.configure(state="disabled")
-        self.es.wm = {}
+        self.es.wm = dict(self.es.initial_wm)
 
     # Запускает процесс распознавания фактов из текста и выполняет алгоритм прямого вывода.
     def run_inference(self):
@@ -102,7 +107,7 @@ class InferenceTab(ttk.Frame):
         self.log.delete("1.0", "end")
         self.log.configure(state="disabled")
 
-        self.es.wm = {}
+        self.es.wm = dict(self.es.initial_wm)
 
         extracted = parse_natural_language(user_text)
         if extracted:
@@ -155,6 +160,134 @@ class InferenceTab(ttk.Frame):
         self.write_log("Превышен лимит шагов вывода.", "warn")
 
 
+# Класс вкладки «Обратный вывод» для доказательства/опровержения цели обратной цепочкой рассуждений.
+class BackwardTab(ttk.Frame):
+    # Конструктор класса BackwardTab: создаёт поля ввода описания и цели, кнопки и журнал вывода.
+    def __init__(self, parent, es: ExpertSystem):
+        super().__init__(parent, padding=10)
+        self.es = es
+
+        ttk.Label(self, text="Подбор книги обратной цепочкой рассуждений")\
+            .pack(anchor="w")
+        ttk.Label(self, text="Опишите словами, какую книгу вы хотите (свободным текстом).\n"
+                             "Например: «хочу книгу про общество» / "
+                             "«интересная книга про загадки и расследования».")\
+            .pack(anchor="w", pady=(0, 4))
+
+        self.facts_input = scrolledtext.ScrolledText(self, height=3, wrap="word", font=("Segoe UI", 10))
+        self.facts_input.pack(fill="x")
+
+        goal_row = ttk.Frame(self)
+        goal_row.pack(fill="x", pady=(6, 4))
+        ttk.Label(goal_row, text="Цель (необязательно, пусто → любая подходящая книга):").pack(side="left")
+        self.goal_entry = ttk.Entry(goal_row)
+        self.goal_entry.pack(side="left", fill="x", expand=True, padx=6)
+        ttk.Label(self, text="Цель можно задать названием книги (например: 1984), свободным текстом "
+                             "или в формате «объект: значение» (для любого значения — '*').",
+                  foreground="#666666").pack(anchor="w")
+
+        btns = ttk.Frame(self)
+        btns.pack(fill="x", pady=6)
+        ttk.Button(btns, text="Подобрать (обратный вывод)", command=self.run_backward).pack(side="left")
+        ttk.Button(btns, text="Сбросить к начальным фактам", command=self.reset_facts).pack(side="left", padx=6)
+        ttk.Button(btns, text="Очистить журнал", command=self.clear_log).pack(side="left")
+
+        self.log = scrolledtext.ScrolledText(self, wrap="word", font=("Consolas", 10), state="disabled")
+        self.log.pack(fill="both", expand=True)
+
+        self.log.tag_config("sys",   foreground="#0a7a3a")
+        self.log.tag_config("tree",  foreground="#333333")
+        self.log.tag_config("ok",    foreground="#0a7a3a", font=("Consolas", 10, "bold"))
+        self.log.tag_config("fail",  foreground="#b00020", font=("Consolas", 10, "bold"))
+        self.log.tag_config("fact",  foreground="#b06a00")
+        self.log.tag_config("warn",  foreground="#c06000")
+
+    # Добавляет строку в журнал вывода с указанным стилем.
+    def write_log(self, text, tag=None):
+        self.log.configure(state="normal")
+        self.log.insert("end", text + "\n", tag or "")
+        self.log.see("end")
+        self.log.configure(state="disabled")
+
+    # Очищает журнал вывода.
+    def clear_log(self):
+        self.log.configure(state="normal")
+        self.log.delete("1.0", "end")
+        self.log.configure(state="disabled")
+
+    # Сбрасывает поле описания и восстанавливает начальное состояние РБД.
+    def reset_facts(self):
+        self.facts_input.delete("1.0", "end")
+        self.es.wm = dict(self.es.initial_wm)
+        self.write_log("[СИСТЕМА] РБД сброшена к начальным фактам.", "sys")
+        self.refresh_state()
+
+    # Показывает текущее состояние РБД на вкладке обратного вывода.
+    def refresh_state(self):
+        self.write_log("\n[РБД] " + (
+            ", ".join(f"{format_display(k)}={format_display(v)}" for k, v in self.es.wm.items())
+            or "<пусто>"), "sys")
+
+    # Запускает обратный вывод: разбирает описание и цель, строит дерево доказательства.
+    def run_backward(self):
+        facts_text = self.facts_input.get("1.0", "end").strip()
+        goal_raw = self.goal_entry.get().strip()
+
+        extra_facts = ""
+        goal = None
+        if goal_raw:
+            goal = self.es.parse_goal(goal_raw)
+            if goal is None:
+                # текст не распознан как цель (объект:значение или название книги) —
+                # считаем его дополнительным описанием, а целью будет любая книга
+                extra_facts = goal_raw
+
+        if goal is None:
+            goal = dict(self.es.goal) or {"рекомендация": "*"}
+
+        combined_facts = "\n".join(p for p in (facts_text, extra_facts) if p)
+
+        self.clear_log()
+        self.write_log("[СИСТЕМА] Запуск обратной цепочки рассуждений.", "sys")
+
+        parsed = self.es.parse_facts_text(combined_facts)
+        if parsed:
+            self.write_log("[СИСТЕМА] Распознанные факты из описания:", "sys")
+            for k, v in parsed.items():
+                self.write_log(f"   {format_display(k)} = {format_display(v)}", "fact")
+        elif combined_facts:
+            self.write_log("[СИСТЕМА] Факты не распознаны, используются начальные.", "warn")
+        else:
+            self.write_log("[СИСТЕМА] Используются начальные факты из initial_facts.json:", "sys")
+            for k, v in self.es.initial_wm.items():
+                self.write_log(f"   {format_display(k)} = {format_display(v)}", "fact")
+
+        self.write_log("[СИСТЕМА] Цель: " + ", ".join(
+            f"{format_display(k)} = {format_display(v)}" for k, v in goal.items()), "sys")
+
+        result = self.es.run_backward_chaining(facts_text=combined_facts, goal=goal)
+
+        self.write_log("\n[РБД] " + (
+            ", ".join(f"{format_display(k)}={format_display(v)}" for k, v in result["wm"].items())
+            or "<пусто>"), "sys")
+
+        self.write_log("\n--- ДЕРЕВО ДОКАЗАТЕЛЬСТВА ---", "sys")
+        for line in result["tree"]:
+            self.write_log(line, "tree")
+
+        if result["derived"]:
+            self.write_log("\n--- ВЫВЕДЕННЫЕ ФАКТЫ ---", "sys")
+            for k, v in result["derived"]:
+                self.write_log(f"   + {format_display(k)} = {format_display(v)}", "fact")
+
+        tag = "ok" if result["ok"] else "fail"
+        self.write_log("\n" + "=" * 50, tag)
+        self.write_log(f"РЕЗУЛЬТАТ: {result['status']}", tag)
+        if result["ok"] and "рекомендация" in result["wm"]:
+            self.write_log(f"Ответ: {result['wm']['рекомендация']}", tag)
+        self.write_log("=" * 50, tag)
+
+
 # Класс вкладки «База правил» для просмотра, добавления, редактирования и удаления правил экспертной системы.
 class RulesTab(ttk.Frame):
     # Конструктор класса RulesTab: инициализирует таблицу правил и форму ввода с кнопками действий.
@@ -162,7 +295,9 @@ class RulesTab(ttk.Frame):
         super().__init__(parent, padding=10)
         self.es = es
 
-        ttk.Label(self, text=f"База правил (файл: {RULES_FILE})").pack(anchor="w")
+        ttk.Label(self, text=f"База правил (файл: {os.path.basename(RULES_FILE)})").pack(anchor="w")
+        self.count_label = ttk.Label(self, text="")
+        self.count_label.pack(anchor="w")
 
         cols = ("id", "if", "then")
         self.tree = ttk.Treeview(self, columns=cols, show="headings", height=14)
@@ -194,12 +329,16 @@ class RulesTab(ttk.Frame):
 
     # Перезагружает и отображает актуальный список правил из базы в таблице Treeview.
     def refresh(self):
+        self.es.load_rules()
         for iid in self.tree.get_children():
             self.tree.delete(iid)
         for r in self.es.rules:
             if_str = " И ".join(f"{format_display(k)}='{format_display(v)}'" for k, v in r["if"].items())
             then_str = ", ".join(f"{format_display(k)}='{format_display(v)}'" for k, v in r["then"].items())
             self.tree.insert("", "end", values=(r["id"], if_str, then_str))
+        self.count_label.config(text=f"Правил в базе: {len(self.es.rules)}")
+        if not self.es.rules:
+            self.tree.insert("", "end", values=("-", "База правил пуста или файл не найден", str(RULES_FILE)))
 
     # Парсит и валидирует тексты из полей ввода 'ЕСЛИ' и 'ТО', преобразуя их в словари.
     def _parse_inputs(self):

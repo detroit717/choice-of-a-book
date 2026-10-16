@@ -2,7 +2,34 @@ import json
 import os
 import re
 
-RULES_FILE = "rules.json"
+RULES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rules.json")
+INITIAL_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "initial_facts.json")
+MAX_DEPTH = 50
+
+
+class ProofNode:
+    """Узел дерева доказательства обратной цепочки рассуждений."""
+
+    def __init__(self, kind, text, ok=False):
+        self.kind = kind   # goal | rule | fact | contra | norule | cycle
+        self.text = text
+        self.ok = ok
+        self.children = []
+
+    def render(self, depth=0, lines=None):
+        if lines is None:
+            lines = []
+        mark = "+" if self.ok else "-"
+        lines.append("  " * depth + f"[{mark}] {self.text}")
+        for ch in self.children:
+            ch.render(depth + 1, lines)
+        return lines
+
+    def has_kind(self, kind):
+        if self.kind == kind:
+            return True
+        return any(ch.has_kind(kind) for ch in self.children)
+
 
 KEYWORDS = {
     "цель": {
@@ -81,11 +108,15 @@ def parse_natural_language(text: str) -> dict:
     return extracted
 
 class ExpertSystem:
-    def __init__(self, rules_filename):
+    def __init__(self, rules_filename=RULES_FILE):
         self.rules_filename = rules_filename
         self.rules = []
         self.wm = {}
+        self.initial_wm = {}
+        self.goal = {}
+        self.derived = []
         self.load_rules()
+        self.load_initial_state()
 
     def load_rules(self):
         if os.path.exists(self.rules_filename):
@@ -96,6 +127,20 @@ class ExpertSystem:
                 print(f"Ошибка загрузки базы правил: {e}")
         else:
             self.rules = []
+
+    def load_initial_state(self):
+        """Читает начальное состояние РБД и цель по умолчанию из initial_facts.json."""
+        self.initial_wm = {}
+        self.goal = {}
+        if os.path.exists(INITIAL_FILE):
+            try:
+                with open(INITIAL_FILE, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                self.initial_wm = dict(data.get("wm", {}))
+                self.goal = dict(data.get("goal", {}))
+            except Exception as e:
+                print(f"Ошибка загрузки начального состояния РБД: {e}")
+        self.wm = dict(self.initial_wm)
 
     def save_rules(self):
         try:
@@ -169,6 +214,15 @@ class ExpertSystem:
         except ValueError:
             print("Некорректный ID.")
 
+    def edit_rule(self, rule_id, if_dict, then_dict):
+        for rule in self.rules:
+            if rule['id'] == rule_id:
+                rule['if'] = if_dict
+                rule['then'] = then_dict
+                self.save_rules()
+                return True
+        return False
+
     def show_working_memory(self):
         print("\nТЕКУЩИЕ ФАКТЫ В РБД:")
         if not self.wm:
@@ -178,7 +232,7 @@ class ExpertSystem:
                 print(f" • {format_display(k)} = {format_display(v)}")
 
     def run_forward_chaining(self):
-        self.wm = {}
+        self.wm = dict(self.initial_wm)
         print("\nОпишите, какую книгу вы хотите (произвольным предложением):")
         user_input = input("> ").strip()
         
@@ -238,6 +292,185 @@ class ExpertSystem:
                         self.wm.update(more_extracted)
                     else:
                         print("Не удалось распознать факт. Попробуйте ввести в формате 'объект: значение'.")
+
+    # ---------- обратная цепочка рассуждений ----------
+
+    def book_titles(self):
+        """Список всех книг, встречающихся в заключениях правил."""
+        return [r['then']['рекомендация'] for r in self.rules if 'рекомендация' in r['then']]
+
+    @staticmethod
+    def _stem(word: str) -> str:
+        """Грубое усечение русских окончаний для сопоставления слов."""
+        for suf in ("иями", "ями", "ами", "ий", "ая", "ое", "ые", "ой", "ей",
+                    "ем", "ом", "ам", "ям", "ах", "ях", "ов", "ев", "ью",
+                    "ю", "я", "а", "о", "е", "у", "ы", "и", "й", "ь"):
+            if word.endswith(suf) and len(word) - len(suf) >= 3:
+                return word[:-len(suf)]
+        return word
+
+    def match_book(self, text: str):
+        """Пытается найти книгу из базы знаний по свободному тексту. Возвращает название или None."""
+        cleaned = re.sub(r"[^0-9a-zа-яё]+", " ", normalize(text))
+        stems = {self._stem(t) for t in cleaned.split() if t}
+        for title in self.book_titles():
+            main = title.split("(")[0]
+            for word in normalize(main).split("_"):
+                if word and self._stem(word) in stems:
+                    return title
+        return None
+
+    def parse_facts_text(self, text: str):
+        """Разбирает многострочный текст с фактами: строки 'объект: значение' и свободный текст."""
+        result = {}
+        for line in (text or "").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            if ":" in line:
+                k, v = line.split(":", 1)
+                nk = normalize(k)
+                result[nk] = v.strip() if nk == "рекомендация" else normalize(v)
+            else:
+                result.update(parse_natural_language(line))
+        return result
+
+    def parse_goal(self, raw: str):
+        """Преобразует цель. Поддерживает 'объект: значение' и название книги.
+
+        Свободный текст описания целью не считается — возвращается None,
+        чтобы вызывающий код трактовал его как описание (факты).
+        """
+        raw = (raw or "").strip()
+        if not raw:
+            return None
+        if ":" in raw:
+            k, v = raw.split(":", 1)
+            k = normalize(k)
+            v = "*" if v.strip() == "*" else (v.strip() if k == "рекомендация" else normalize(v))
+            return {k: v}
+        book = self.match_book(raw)
+        if book:
+            return {"рекомендация": book}
+        return None
+
+    def _backward_candidates(self, key, value):
+        return [
+            r for r in self.rules
+            if key in r['then'] and (value == "*" or r['then'][key] == value)
+        ]
+
+    def _backward_prove(self, key, value, depth, active):
+        """Рекурсивно доказывает подцель key=value. Возвращает (ok, узел дерева)."""
+        if depth > MAX_DEPTH:
+            return False, ProofNode("cycle", f"Превышена глубина рекурсии ({key}={value})", False)
+
+        node = ProofNode("goal", f"Подцель: {format_display(key)} = {format_display(value)}", False)
+
+        # 1. Факт уже известен в РБД
+        if key in self.wm:
+            cur = self.wm[key]
+            if value == "*" or cur == value:
+                node.kind = "fact"
+                node.ok = True
+                node.text = f"Факт уже в РБД: {format_display(key)} = {format_display(cur)}"
+                return True, node
+            node.kind = "contra"
+            node.text = (f"ПРОТИВОРЕЧИЕ: в РБД {format_display(key)} = {format_display(cur)}, "
+                         f"а требуется {format_display(value)}")
+            return False, node
+
+        # 2. Правила, которые могут вывести эту подцель (пробуем по порядку, backtracking)
+        candidates = self._backward_candidates(key, value)
+        if not candidates:
+            node.kind = "norule"
+            node.text = f"Нет правил, выводящих {format_display(key)} = {format_display(value)}"
+            return False, node
+
+        for rule in candidates:
+            if rule['id'] in active:
+                node.children.append(ProofNode(
+                    "cycle", f"Правило №{rule['id']} пропущено: циклическая зависимость", False))
+                continue
+
+            cond = " И ".join(f"{format_display(k)}='{format_display(v)}'" for k, v in rule['if'].items())
+            conc = ", ".join(f"{format_display(k)}='{format_display(v)}'" for k, v in rule['then'].items())
+            rnode = ProofNode("rule", f"Правило №{rule['id']}: ЕСЛИ {cond} -> ТО {conc}", False)
+
+            active.add(rule['id'])
+            ok = True
+            for ck, cv in rule['if'].items():
+                sub_ok, sub = self._backward_prove(ck, cv, depth + 1, active)
+                rnode.children.append(sub)
+                if not sub_ok:
+                    ok = False
+                    break
+            active.discard(rule['id'])
+
+            if ok:
+                rnode.ok = True
+                for tk, tv in rule['then'].items():
+                    if tk not in self.wm:
+                        self.wm[tk] = tv
+                        self.derived.append((tk, tv))
+                node.children.append(rnode)
+                node.ok = True
+                return True, node
+
+            node.children.append(rnode)
+
+        return False, node
+
+    def backward_chaining(self, goal=None):
+        """Доказывает/опровергает цель обратной цепочкой рассуждений.
+
+        Возвращает (доказана: bool, статус: str, корень: ProofNode, строки: list[str]).
+        """
+        if goal is not None:
+            self.goal = dict(goal)
+        if not self.goal:
+            raise ValueError("Целевая ситуация не задана")
+
+        self.derived = []
+        key, value = next(iter(self.goal.items()))
+        root_text = f"ЦЕЛЬ: {format_display(key)} = {format_display(value)}"
+
+        ok, subtree = self._backward_prove(key, value, 0, set())
+        root = ProofNode("goal", root_text, ok)
+        root.children.append(subtree)
+
+        if ok:
+            status = "ЦЕЛЬ ДОКАЗАНА"
+        elif subtree.has_kind("contra"):
+            status = "ЦЕЛЬ ОПРОВЕРГНУТА (противоречит исходным данным)"
+        else:
+            status = "ЦЕЛЬ НЕ ДОКАЗАНА (недостаточно фактов или правил)"
+
+        return ok, status, root, subtree.render(1)
+
+    def run_backward_chaining(self, facts_text="", goal=None):
+        """Полный прогон обратного вывода с текстовым отчётом.
+
+        Сбрасывает РБД к начальному состоянию, добавляет факты из facts_text
+        (естественный язык или формат 'объект: значение'), доказывает цель.
+        Возвращает словарь с результатами для отображения в интерфейсе.
+        """
+        self.wm = dict(self.initial_wm)
+        if facts_text:
+            self.wm.update(self.parse_facts_text(facts_text))
+
+        ok, status, root, lines = self.backward_chaining(goal)
+
+        result = {
+            "ok": ok,
+            "status": status,
+            "tree": root.render(0),
+            "branches": lines,
+            "derived": list(self.derived),
+            "wm": dict(self.wm),
+        }
+        return result
+
 
 def main():
     es = ExpertSystem(RULES_FILE)
